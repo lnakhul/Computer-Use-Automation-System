@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
+
 from automation.capabilities.models import (
     Action,
     ActionRisk,
@@ -31,7 +34,12 @@ class PolicyEnforcedSurfaceAdapter:
         self._surface = surface
         self._evaluator = evaluator
 
-    def execute_action(self, action: Action, human_confirmation: bool = False) -> str | ResolvedSurfaceTarget | None:
+    def execute_action(
+        self,
+        action: Action,
+        human_confirmation: bool = False,
+        runtime_values: Mapping[str, object] | None = None,
+    ) -> str | ResolvedSurfaceTarget | None:
         current_location = self._surface.observe().current_location
         destination = action.route if isinstance(action, NavigateAction) else None
         decision = self._evaluator.evaluate(
@@ -52,7 +60,10 @@ class PolicyEnforcedSurfaceAdapter:
         if isinstance(action, ClickAction):
             return self._surface.click(action.target)
         if isinstance(action, FillAction):
-            return self._surface.enter_text(action.target, action.value_template)
+            return self._surface.enter_text(
+                action.target,
+                self._resolve_runtime_value(action.value_template, runtime_values or {}),
+            )
         if isinstance(action, WaitForStateAction):
             self._surface.wait_for_state(action.condition, action.timeout_seconds)
             return None
@@ -62,3 +73,13 @@ class PolicyEnforcedSurfaceAdapter:
 
     def observe(self) -> SurfaceObservation:
         return self._surface.observe()
+
+    @staticmethod
+    def _resolve_runtime_value(value_template: str, runtime_values: Mapping[str, object]) -> str:
+        def replace_reference(match: re.Match[str]) -> str:
+            parameter_name = match.group(1)
+            if parameter_name not in runtime_values:
+                raise PolicyViolationError(f"runtime value is missing for parameter: {parameter_name}")
+            return str(runtime_values[parameter_name])
+
+        return re.sub(r"\$\{(?:inputs\.)?([a-zA-Z_][a-zA-Z0-9_]*)\}", replace_reference, value_template)
