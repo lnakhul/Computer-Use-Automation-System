@@ -1,0 +1,11 @@
+README.md
+pyproject.toml
+src/automation/__init__.py
+src/automation/capabilities/__init__.py
+src/automation/capabilities/models.py
+src/computer_use_automation_system.egg-info/PKG-INFO
+src/computer_use_automation_system.egg-info/SOURCES.txt
+src/computer_use_automation_system.egg-info/dependency_links.txt
+src/computer_use_automation_system.egg-info/requires.txt
+src/computer_use_automation_system.egg-info/top_level.txt
+tests/test_capability_models.py

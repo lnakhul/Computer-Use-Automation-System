@@ -1,0 +1,168 @@
+{
+  "artifact_schema_version": "1.0",
+  "capability_id": "member.savings_balance.lookup",
+  "revision": 1,
+  "name": "Look up member savings balance",
+  "description": "Find a synthetic member by ID and read the current savings balance.",
+  "compatibility": {
+    "surface_kind": "web",
+    "vendor_product": "local-member-servicing",
+    "vendor_version": "demo-1",
+    "application_name": "Member Servicing Console",
+    "application_version": "demo-1"
+  },
+  "entry_point": "/members/search",
+  "inputs": [
+    {
+      "value_type": "string",
+      "name": "member_id",
+      "description": "Five-digit synthetic member identifier.",
+      "pattern": "^[0-9]{5}$"
+    }
+  ],
+  "actions": [
+    {
+      "action_type": "navigate",
+      "action_id": "open-search",
+      "description": "Open member search.",
+      "route": "/members/search"
+    },
+    {
+      "action_type": "fill",
+      "action_id": "enter-member-id",
+      "description": "Enter the requested member ID.",
+      "target": {
+        "description": "Member ID field",
+        "candidates": [
+          {
+            "priority": 1,
+            "strategy": {
+              "kind": "label",
+              "label": "Member ID"
+            }
+          },
+          {
+            "priority": 2,
+            "strategy": {
+              "kind": "attribute",
+              "attribute_name": "name",
+              "attribute_value": "member_id"
+            }
+          }
+        ]
+      },
+      "value_template": "${inputs.member_id}"
+    },
+    {
+      "action_type": "click",
+      "action_id": "submit-search",
+      "description": "Submit the member search.",
+      "target": {
+        "description": "Search button",
+        "candidates": [
+          {
+            "priority": 1,
+            "strategy": {
+              "kind": "role",
+              "role": "button",
+              "accessible_name": "Search"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "action_type": "wait_for_state",
+      "action_id": "wait-for-member-detail",
+      "description": "Wait for the member detail heading.",
+      "condition": {
+        "condition_type": "element_visible",
+        "target": {
+          "description": "Member detail heading",
+          "candidates": [
+            {
+              "priority": 1,
+              "strategy": {
+                "kind": "role",
+                "role": "heading",
+                "accessible_name": "Member Details"
+              }
+            }
+          ]
+        }
+      },
+      "timeout_seconds": 10
+    },
+    {
+      "action_type": "extract_text",
+      "action_id": "read-savings-balance",
+      "description": "Read the savings balance.",
+      "target": {
+        "description": "Savings balance value",
+        "candidates": [
+          {
+            "priority": 1,
+            "strategy": {
+              "kind": "label",
+              "label": "Savings balance"
+            }
+          }
+        ]
+      },
+      "output_name": "savings_balance"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "savings_balance",
+      "description": "Current savings balance.",
+      "output_type": "decimal",
+      "source_action_id": "read-savings-balance",
+      "parser": "currency",
+      "sensitive": true
+    }
+  ],
+  "success_checkpoint": {
+    "description": "A parseable savings balance is visible.",
+    "conditions": [
+      {
+        "condition_type": "extracted_value_matches",
+        "output_name": "savings_balance",
+        "pattern": "^\\$?[0-9,]+\\.[0-9]{2}$"
+      }
+    ]
+  },
+  "known_business_outcomes": [
+    {
+      "code": "MEMBER_NOT_FOUND",
+      "description": "No member exists for the requested identifier.",
+      "detection": {
+        "condition_type": "text_contains",
+        "target": {
+          "description": "Search result status",
+          "candidates": [
+            {
+              "priority": 1,
+              "strategy": {
+                "kind": "text",
+                "text": "Member not found"
+              }
+            }
+          ]
+        },
+        "expected_text": "Member not found"
+      }
+    }
+  ],
+  "safety_profile": {
+    "permitted_action_types": [
+      "navigate",
+      "fill",
+      "click",
+      "wait_for_state",
+      "extract_text"
+    ],
+    "maximum_risk": "reversible",
+    "risky_action_policy": "block"
+  }
+}
