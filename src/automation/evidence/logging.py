@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,9 +22,13 @@ class JsonlEvidenceWriter:
     ) -> None:
         self._destination = destination
         self._redactor = redactor
-        self._run_id = run_id
+        self._run_id = run_id or str(uuid.uuid4())
         self._capability_id = capability_id
         self._artifact_schema_version = artifact_schema_version
+
+    @property
+    def run_id(self) -> str:
+        return self._run_id
 
     def write_event(self, event: dict[str, Any]) -> None:
         event_with_context = {

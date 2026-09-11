@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator
 
-from automation.capabilities.models import ActionRisk, ActionType, ContractModel
+from automation.capabilities.models import ActionRisk, ActionType, ContractModel, ElementTarget
 
 
 class PolicyDecisionKind(StrEnum):
@@ -36,9 +36,17 @@ class AllowedTarget(ContractModel):
         return route_prefixes
 
 
+class ApprovedInteraction(ContractModel):
+    action_type: ActionType
+    target: ElementTarget
+    risk: ActionRisk
+
+
 class SafetyPolicy(ContractModel):
     allowed_targets: list[AllowedTarget] = Field(min_length=1)
     permitted_action_types: list[ActionType] = Field(min_length=1)
+    approved_interactions: list[ApprovedInteraction] = Field(default_factory=list)
+    allowed_post_routes: list[str] = Field(default_factory=list)
     confirmation_required_risks: list[ActionRisk] = Field(
         default_factory=lambda: [ActionRisk.IRREVERSIBLE]
     )
@@ -48,6 +56,7 @@ class SafetyPolicy(ContractModel):
 class PolicyActionRequest(ContractModel):
     action_type: ActionType
     risk: ActionRisk
+    target: ElementTarget | None = None
     destination: str | None = None
     human_confirmation: bool = False
 

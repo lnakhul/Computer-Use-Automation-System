@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import time
+import json
+import uuid
+from pathlib import Path
 from collections.abc import Mapping
 
 from pydantic import TypeAdapter, ValidationError
 
-from pydantic import TypeAdapter
 
 from automation.capabilities.models import (
     Action,
@@ -18,6 +20,7 @@ from automation.capabilities.models import (
     NavigateAction,
     WaitForStateAction,
 )
+from automation.capabilities.runtime import validate_inputs, parse_outputs, condition_matches
 from automation.discovery.contracts import AgentDecisionProvider, DecisionProviderError
 from automation.discovery.models import (
     AgentDecision,
@@ -49,17 +52,29 @@ class DiscoveryRunner:
         decision_provider: AgentDecisionProvider,
         policy_surface: PolicyEnforcedSurfaceAdapter,
         evidence_writer: JsonlEvidenceWriter | None = None,
+        evidence_directory: Path | None = None,
+        intervention_handler=None,
     ) -> None:
         self._surface = surface
         self._decision_provider = decision_provider
         self._policy_surface = policy_surface
         self._evidence_writer = evidence_writer
+        self._evidence_directory = evidence_directory
+        self._intervention_handler = intervention_handler
 
     def run(self, request: DiscoveryRequest) -> DiscoveryResult:
         started_at = time.monotonic()
+        self._request = request
+        self._run_id = self._evidence_writer.run_id if self._evidence_writer else str(uuid.uuid4())
+        raw_outputs = {}
+        intervention_used = False
         recorded_actions: list[Action] = []
         runtime_values = {parameter.name: parameter.value for parameter in request.runtime_parameters}
 
+        try:
+            runtime_values = validate_inputs(request.artifact_definition.inputs, runtime_values)
+        except ValueError:
+            return self._result(DiscoveryStopState.MODEL_INVALID_RESPONSE, 0, "invalid discovery inputs")
         try:
             initial_action = NavigateAction(
                 action_id="step-001-open-entry-point",
@@ -81,7 +96,7 @@ class DiscoveryRunner:
             try:
                 observation = self._policy_surface.observe()
                 self._write_observation(step_number, observation)
-                proposed_decision = self._decision_provider.decide(request.goal, observation)
+                proposed_decision = self._decision_provider.decide(request.goal + "\nCapability contract: " + json.dumps({"inputs": runtime_values, "outputs": [o.name for o in request.artifact_definition.outputs]}), observation)
                 decision = TypeAdapter(AgentDecision).validate_python(proposed_decision)
             except SurfaceAdapterError as error:
                 return self._result(DiscoveryStopState.UNRECOVERABLE_SURFACE_FAILURE, len(recorded_actions), str(error))
@@ -98,15 +113,22 @@ class DiscoveryRunner:
             if isinstance(decision, GoalAchievedDecision):
                 try:
                     artifact = self._build_artifact(request, recorded_actions)
-                except DiscoveryArtifactError as error:
+                    parse_outputs(artifact.outputs, raw_outputs)
+                    if observation.dialog_text or any(not condition_matches(self._surface, c, raw_outputs, runtime_values) for c in artifact.success_checkpoint.conditions):
+                        raise DiscoveryArtifactError("declared success checkpoint was not met")
+                except (DiscoveryArtifactError, ValueError, SurfaceAdapterError) as error:
                     return self._result(DiscoveryStopState.MODEL_INVALID_RESPONSE, len(recorded_actions), str(error))
-                self._write_event("goal_achieved", step_number, None, decision.reasoning_summary)
+                self._write_event("goal_achieved", step_number, None, "declared checkpoint verified")
                 return DiscoveryResult(
                     stop_state=DiscoveryStopState.GOAL_ACHIEVED,
                     steps_executed=len(recorded_actions),
                     artifact=artifact,
                 )
             if isinstance(decision, HumanInterventionDecision):
+                if not intervention_used and self._intervention_handler is not None:
+                    intervention_used = True
+                    if self._intervention_handler(request.artifact_definition.capability_id, request.goal, "discovery", len(recorded_actions), "model requested human intervention"):
+                        continue
                 return self._result(DiscoveryStopState.HUMAN_INTERVENTION_REQUIRED, len(recorded_actions), decision.reason)
 
             try:
@@ -125,6 +147,7 @@ class DiscoveryRunner:
                     action_result=result_summary,
                 )
                 if action_result is not None and isinstance(recorded_action, ExtractTextAction):
+                    raw_outputs[recorded_action.output_name] = action_result
                     self._write_event(
                         "extraction_completed",
                         step_number,
@@ -132,7 +155,7 @@ class DiscoveryRunner:
                         "declared output captured",
                         action_result="value captured in memory",
                     )
-            except DiscoveryArtifactError as error:
+            except (DiscoveryArtifactError, ValueError) as error:
                 return self._result(DiscoveryStopState.MODEL_INVALID_RESPONSE, len(recorded_actions), str(error))
             except PolicyViolationError as error:
                 return self._result(DiscoveryStopState.BLOCKED_BY_POLICY, len(recorded_actions), str(error))
@@ -149,9 +172,12 @@ class DiscoveryRunner:
         action_number: int,
     ) -> Action:
         action_id = f"step-{action_number:03d}-{decision.decision_type}"
-        common = {"action_id": action_id, "description": decision.reasoning_summary}
+        common = {"action_id": action_id, "description": f"Recorded {decision.decision_type} action"}
         if isinstance(decision, NavigateDecision):
-            return NavigateAction(**common, route=decision.destination, risk=decision.risk)
+            route = decision.destination
+            for name, value in runtime_values.items():
+                route = route.replace(str(value), "${" + name + "}")
+            return NavigateAction(**common, route=route, risk=decision.risk)
         if isinstance(decision, ClickDecision):
             return ClickAction(**common, target=decision.target, risk=decision.risk)
         if isinstance(decision, FillDecision):
@@ -208,7 +234,7 @@ class DiscoveryRunner:
         invalid_output_sources = [output.source_action_id for output in outputs if output.source_action_id not in action_ids]
         if invalid_output_sources:
             raise DiscoveryArtifactError(f"declared outputs were not extracted: {invalid_output_sources}")
-        return CapabilityArtifact(
+        artifact = CapabilityArtifact(
             capability_id=request.artifact_definition.capability_id,
             revision=request.artifact_definition.revision,
             name=request.artifact_definition.name,
@@ -222,6 +248,12 @@ class DiscoveryRunner:
             known_business_outcomes=request.artifact_definition.known_business_outcomes,
             safety_profile=request.artifact_definition.safety_profile,
         )
+
+        serialized = artifact.model_dump_json()
+        for parameter in request.runtime_parameters:
+            if parameter.value in serialized:
+                raise DiscoveryArtifactError("artifact contains a literal invocation value; use symbolic references")
+        return artifact
 
     @staticmethod
     def _find_output_action_id(output: object, recorded_actions: list[Action]) -> str:
@@ -242,10 +274,10 @@ class DiscoveryRunner:
             None,
             "surface observed",
             {
-                "location": observation.current_location,
-                "title": observation.title,
-                "visible_text": observation.visible_text,
-                "dialog_text": observation.dialog_text,
+                "location": "[WITHHELD]",
+                "title": "[WITHHELD]",
+                "visible_text": "[WITHHELD]",
+                "dialog_present": bool(observation.dialog_text),
             },
         )
 
@@ -262,6 +294,9 @@ class DiscoveryRunner:
             return
         event: dict[str, object] = {
             "event_type": event_type,
+            "run_id": self._run_id,
+            "capability_id": self._request.artifact_definition.capability_id,
+            "revision": self._request.artifact_definition.revision,
             "step_number": step_number,
             "reasoning_summary": reasoning_summary,
         }
@@ -274,6 +309,13 @@ class DiscoveryRunner:
             event["action_result"] = action_result
         self._evidence_writer.write_event(event)
 
-    @staticmethod
-    def _result(stop_state: DiscoveryStopState, steps_executed: int, reason: str) -> DiscoveryResult:
-        return DiscoveryResult(stop_state=stop_state, steps_executed=steps_executed, reason=reason)
+    def _result(self, stop_state, steps_executed, reason):
+        evidence_reference = None
+        if self._evidence_directory is not None:
+            try:
+                evidence_reference = str(self._surface.capture_evidence(Path(self._evidence_directory) / f"{self._run_id}-discovery-failure.png"))
+            except Exception:
+                pass
+        self._write_event("discovery_stopped", steps_executed, None, stop_state.value, {"evidence_reference": evidence_reference})
+        return DiscoveryResult(stop_state=stop_state, steps_executed=steps_executed, reason=stop_state.value,
+                               evidence_reference=evidence_reference)

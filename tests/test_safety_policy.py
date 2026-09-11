@@ -66,6 +66,7 @@ class RecordingSurface:
 
 def policy() -> SafetyPolicy:
     return SafetyPolicy(
+        approved_interactions=[{"action_type":"click", "target":target(), "risk":"read_only"}],
         allowed_targets=[
             AllowedTarget(
                 origin="https://bank.example.test",
@@ -131,6 +132,7 @@ def test_consequential_action_requires_human_confirmation() -> None:
         PolicyActionRequest(
             action_type=ActionType.CLICK,
             risk=ActionRisk.IRREVERSIBLE,
+            target=target(),
             destination="https://bank.example.test/accounts/submit",
         )
     )

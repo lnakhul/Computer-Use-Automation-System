@@ -135,7 +135,7 @@ def example_artifact_payload() -> dict:
                 {
                     "condition_type": "extracted_value_matches",
                     "output_name": "savings_balance",
-                    "pattern": r"^\\$?[0-9,]+\\.[0-9]{2}$",
+                    "pattern": r"^\$?[0-9,]+\.[0-9]{2}$",
                 }
             ],
         },
@@ -222,6 +222,7 @@ def test_typed_parameters_preserve_declared_types() -> None:
         },
     ]
 
+    payload["actions"][1]["value_template"] = "${attempt_count}"
     artifact = CapabilityArtifact.model_validate(payload)
 
     assert artifact.inputs[0].value_type == "integer"

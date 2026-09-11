@@ -54,16 +54,14 @@ class HumanInterventionCoordinator:
         request = HumanInterventionRequest(
             request_id=str(uuid.uuid4()),
             capability_id=capability_id,
-            goal=goal,
+            goal="Operator assistance for the current capability",
             current_step_id=current_step_id,
             current_step_index=current_step_index,
-            reason=reason,
+            reason="Automation requires operator review",
             sanitized_current_state={
                 "surface_identifier": observation.surface_identifier,
-                "current_location": observation.current_location,
-                "title": observation.title,
-                "visible_text": observation.visible_text[:1000],
-                "dialog_text": observation.dialog_text,
+                "dialog_present": str(bool(observation.dialog_text)),
+                "page_content": "[WITHHELD]",
             },
             screenshot_evidence_reference=screenshot_reference,
             session_id=session.session_id,
@@ -73,7 +71,7 @@ class HumanInterventionCoordinator:
             session_id=session.session_id,
             from_owner=ControlOwner.AUTOMATION,
             to_owner=ControlOwner.HUMAN,
-            reason=reason,
+            reason="Automation requires operator review",
             request_id=request.request_id,
         ))
         return request
@@ -86,7 +84,7 @@ class HumanInterventionCoordinator:
             request_id=request.request_id,
             session_id=request.session_id,
             action_type=action.action_type,
-            description=action.description,
+            description="Explicit operator action",
             result_summary="completed" if result is None else "target action completed",
             evidence_reference=evidence_reference,
         )
@@ -116,8 +114,11 @@ class HumanInterventionCoordinator:
     def _capture_evidence(self, label: str) -> str | None:
         if self._evidence_directory is None:
             return None
-        path = self._surface.capture_evidence(self._evidence_directory / f"{label}-{uuid.uuid4()}.png")
-        return str(path)
+        try:
+            path = self._surface.capture_evidence(self._evidence_directory / f"{label}-{uuid.uuid4()}.png")
+            return str(path)
+        except Exception:
+            return None
 
     def _write_event(self, event: ControlTransferEvent | HumanActionRecord) -> None:
         if self._evidence_writer is not None:

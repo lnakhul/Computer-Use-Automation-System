@@ -149,6 +149,7 @@ def request(maximum_steps: int = 8, timeout: float = 30) -> DiscoveryRequest:
 
 def runner(provider: object, surface: FakeDiscoverySurface) -> DiscoveryRunner:
     safety_policy = SafetyPolicy(
+        approved_interactions=[{"action_type":"click", "target":target("Search"), "risk":"read_only"}, {"action_type":"fill", "target":target("Member ID"), "risk":"reversible"}],
         allowed_targets=[AllowedTarget(origin="https://bank.example.test", route_prefixes=["/members"])],
         permitted_action_types=[ActionType.NAVIGATE, ActionType.FILL, ActionType.CLICK, ActionType.EXTRACT_TEXT],
     )

@@ -79,17 +79,17 @@ automation discover \
   --member-id 12345
 ```
 
-This writes `evidence/discovery-artifact.json` when the discovery result is successful and writes `evidence/discovery-run.jsonl`. The model response must conform to the structured decision schema. The command is the genuine-provider path; this repository does not include or claim a completed live model run.
+This writes `evidence/discovery-artifact.json` when the discovery result is successful and writes `evidence/discovery-run.jsonl`. The provider returns JSON which is validated locally against the typed decision schema; discovery verifies the final checkpoint and output parsing before publishing. Add `--interactive` for the same-session JSON-action operator console when discovery is stuck. The command is the genuine-provider path; this repository does not include or claim a completed live model run.
 
 ## Deterministic Replay
 
-Replay the checked-in synthetic artifact without an LLM:
+Replay the artifact produced by discovery without an LLM (the checked-in synthetic artifact can also be used for offline demo testing):
 
 ```bash
-automation replay examples/member_savings_balance.json --member-id 12345
+automation replay evidence/discovery-artifact.json --member-id 67890
 ```
 
-Replay requires the local demo app to be running. The result is printed as structured JSON and the run is recorded in `evidence/replay-run.jsonl`. Failure screenshots are written under `evidence/replay-failures/` when a failure occurs.
+Replay requires the local demo app to be running. Add `--interactive` to route recoverable stops to the same-session operator console. Enter `resume` to continue or `stop` to finish; uncertain clicks are not automatically repeated. The result is printed as structured JSON and the run is recorded in `evidence/replay-run.jsonl`. Fully masked failure screenshots and safe structural snapshots are written under `evidence/replay-failures/` when a failure occurs.
 
 ## Exceptional Outcome
 
@@ -148,14 +148,14 @@ Evidence is generated at runtime and is not treated as proof of a real LLM run. 
 
 ## Security
 
-The policy checks target origins/routes and permitted action types before surface actions execute. Irreversible actions require confirmation or are denied by policy. Runtime invocation values are held in memory and artifact fill steps contain symbolic references such as `${member_id}`. The evidence writer redacts configured sensitive field names and token/header patterns before writing JSONL. Do not put API keys in artifacts, logs, source files, or committed evidence.
+The deployment policy approves controls and their risk independently of model labels, checks current locations, and guards browser requests before dispatch. The synthetic member search is the only allowed POST. Irreversible actions require confirmation or are denied by policy. Runtime invocation values are held in memory and artifact fill steps contain symbolic references such as `${member_id}`. The evidence writer redacts configured sensitive fields and token patterns; failure state omits raw content, screenshots mask the entire page, and companion snapshots contain only structural tags/types. Do not put API keys in artifacts, logs, source files, or committed evidence.
 
 ## Limitations
 
 - The demo target is local and synthetic; no real banking system is integrated.
-- The live provider path supports one OpenAI-compatible chat-completions-style endpoint and depends on the provider accepting the generated JSON schema format.
+- The live provider path supports one OpenAI-compatible chat-completions endpoint with JSON-object output and local schema validation; it has not been verified with a live model.
 - Replay supports the deliberately small V1 action vocabulary and bounded transient retry; it does not perform open-ended recovery.
-- The operator path is a scripted command using a coordinator API, not a multi-user real-time console.
+- The human-demo is scripted; `--interactive` offers an explicit JSON-action operator console on the paused session. Direct browser clicks are not recorded by this console.
 - Native desktop and accessibility-tree adapters are design extensions, not implemented surfaces.
 - There is no distributed execution, artifact catalog, approval workflow, tenant service, or automatic drift remediation.
 - A live model discovery run must be performed manually with the evaluator's own credentials; none is fabricated by this repository.

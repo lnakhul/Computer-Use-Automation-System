@@ -14,6 +14,7 @@ from automation.capabilities.models import (
     NavigateAction,
     WaitForStateAction,
 )
+from automation.capabilities.runtime import resolve_template
 from automation.policy.evaluator import SafetyPolicyEvaluator
 from automation.policy.models import PolicyActionRequest, PolicyDecisionKind
 from automation.surface.contracts import (
@@ -37,6 +38,8 @@ class PolicyEnforcedSurfaceAdapter:
     def __init__(self, surface: ComputerSurfaceAdapter, evaluator: SafetyPolicyEvaluator) -> None:
         self._surface = surface
         self._evaluator = evaluator
+        if hasattr(surface, "configure_request_guard"):
+            surface.configure_request_guard(evaluator.allows_request)
 
     def execute_action(
         self,
@@ -45,11 +48,12 @@ class PolicyEnforcedSurfaceAdapter:
         runtime_values: Mapping[str, object] | None = None,
     ) -> str | ResolvedSurfaceTarget | None:
         current_location = self._surface.observe().current_location
-        destination = action.route if isinstance(action, NavigateAction) else None
+        destination = resolve_template(action.route, runtime_values or {}, url=True) if isinstance(action, NavigateAction) else None
         decision = self._evaluator.evaluate(
             PolicyActionRequest(
                 action_type=action.action_type,
                 risk=action.risk,
+                target=getattr(action, "target", None),
                 destination=destination,
                 human_confirmation=human_confirmation,
             ),
@@ -72,7 +76,10 @@ class PolicyEnforcedSurfaceAdapter:
                 self._resolve_runtime_value(action.value_template, runtime_values or {}),
             )
         if isinstance(action, WaitForStateAction):
-            self._surface.wait_for_state(action.condition, action.timeout_seconds)
+            condition = action.condition
+            if hasattr(condition, "expected_text"):
+                condition = condition.model_copy(update={"expected_text": resolve_template(condition.expected_text, runtime_values or {})})
+            self._surface.wait_for_state(condition, action.timeout_seconds)
             return None
         if isinstance(action, ExtractTextAction):
             return self._surface.read_text_or_value(action.target)
@@ -83,13 +90,4 @@ class PolicyEnforcedSurfaceAdapter:
 
     @staticmethod
     def _resolve_runtime_value(value_template: str, runtime_values: Mapping[str, object]) -> str:
-        def replace_reference(match: re.Match[str]) -> str:
-            parameter_name = match.group(1)
-            if parameter_name not in runtime_values:
-                raise PolicyViolationError(
-                    f"runtime value is missing for parameter: {parameter_name}",
-                    PolicyDecisionKind.DENIED,
-                )
-            return str(runtime_values[parameter_name])
-
-        return re.sub(r"\$\{(?:inputs\.)?([a-zA-Z_][a-zA-Z0-9_]*)\}", replace_reference, value_template)
+        return resolve_template(value_template, runtime_values)

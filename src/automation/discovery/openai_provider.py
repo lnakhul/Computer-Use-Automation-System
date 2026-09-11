@@ -31,7 +31,7 @@ class OpenAICompatibleDecisionProvider:
                     "content": (
                         "Choose exactly one next decision for a computer-use task. "
                         "Return only JSON matching the supplied schema. Never include hidden reasoning; "
-                        "reasoning_summary must be a brief operational summary."
+                        "reasoning_summary must be a brief operational summary. Decision JSON schema: " + json.dumps(self._decision_adapter.json_schema())
                     ),
                 },
                 {
@@ -43,19 +43,14 @@ class OpenAICompatibleDecisionProvider:
                             "title": observation.title,
                             "visible_text": observation.visible_text,
                             "dialog_text": observation.dialog_text,
+                            "controls": observation.controls,
                         },
                     }),
                 },
             ],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "agent_decision",
-                    "strict": True,
-                    "schema": self._decision_adapter.json_schema(),
-                },
-            },
+            "response_format": {"type": "json_object"},
         }
+
         try:
             response = httpx.post(
                 self._endpoint,

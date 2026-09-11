@@ -126,4 +126,5 @@ class DiscoveryResult(ContractModel):
     steps_executed: int = Field(ge=0)
     artifact: CapabilityArtifact | None = None
     reason: str | None = None
+    evidence_reference: str | None = None
 

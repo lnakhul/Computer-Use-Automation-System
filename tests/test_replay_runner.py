@@ -1,3 +1,4 @@
+from decimal import Decimal
 from pathlib import Path
 
 from automation.capabilities.models import CapabilityArtifact
@@ -168,6 +169,7 @@ def artifact(mode: str = "success") -> CapabilityArtifact:
 
 def runner(surface: ReplaySurface, permitted_action_types=None, evidence_directory=None):
     policy = SafetyPolicy(
+        approved_interactions=[{"action_type":"click", "target":target("Search"), "risk":"read_only"}, {"action_type":"fill", "target":target("Member ID"), "risk":"reversible"}],
         allowed_targets=[AllowedTarget(origin="https://bank.example.test", route_prefixes=["/members"])],
         permitted_action_types=permitted_action_types or ["navigate", "fill", "click", "extract_text"],
     )
@@ -184,8 +186,8 @@ def test_successful_replay_returns_typed_outputs() -> None:
     result = runner(surface).replay(artifact(), {"member_id": "12345"})
 
     assert isinstance(result, CapabilityExecutionSucceeded)
-    assert result.outputs == {"savings_balance": "$1,240.50"}
-    assert surface.action_order == ["navigate", "fill", "click"]
+    assert result.outputs == {"savings_balance": Decimal("1240.50")}
+    assert [a for a in surface.action_order if a != "wait"] == ["navigate", "fill", "click"]
 
 
 def test_member_not_found_is_a_business_outcome() -> None:
@@ -195,12 +197,13 @@ def test_member_not_found_is_a_business_outcome() -> None:
     assert result.outcome_code == "MEMBER_NOT_FOUND"
 
 
-def test_transient_delay_is_retried_with_bounded_budget() -> None:
+def test_click_with_uncertain_effect_is_not_retried() -> None:
     surface = ReplaySurface("transient")
 
     result = runner(surface).replay(artifact(), {"member_id": "12345"})
 
-    assert isinstance(result, CapabilityExecutionSucceeded)
+    assert isinstance(result, CapabilityExecutionFailed)
+    assert surface.action_order.count("click") == 1
     assert surface.transient_attempts == 1
 
 

@@ -11,3 +11,10 @@ class TargetResolutionError(SurfaceAdapterError):
 
 class SessionControlError(SurfaceAdapterError):
     """A live-session control transfer was invalid."""
+
+class SurfaceTimeoutError(TargetResolutionError):
+    """A bounded wait expired; only read/wait operations may be retried."""
+
+
+class AmbiguousTargetError(SurfaceAdapterError):
+    """More than one control matches; fallback must not hide ambiguity."""

@@ -6,6 +6,7 @@ browser- or desktop-automation implementation details.
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Literal, Union
@@ -101,7 +102,7 @@ class TextLocator(ContractModel):
 
 class AttributeLocator(ContractModel):
     kind: Literal[LocatorKind.ATTRIBUTE] = LocatorKind.ATTRIBUTE
-    attribute_name: str = Field(min_length=1)
+    attribute_name: str = Field(pattern=r"^[a-zA-Z_][a-zA-Z0-9_-]*$")
     attribute_value: str = Field(min_length=1)
 
 
@@ -277,7 +278,7 @@ class FillAction(ContractModel):
 
     @model_validator(mode="after")
     def require_symbolic_value_template(self) -> FillAction:
-        if "${" not in self.value_template or "}" not in self.value_template:
+        if not re.fullmatch(r"\$\{(?:inputs\.)?[a-zA-Z_][a-zA-Z0-9_]*\}", self.value_template):
             raise ValueError("fill values must be symbolic parameter templates")
         return self
 
@@ -370,6 +371,61 @@ class CapabilityArtifact(ContractModel):
         if invalid_sources:
             raise ValueError(f"outputs reference unknown actions: {invalid_sources}")
 
+        input_names = [parameter.name for parameter in self.inputs]
+        output_names = [output.name for output in self.outputs]
+        if len(input_names) != len(set(input_names)) or len(output_names) != len(set(output_names)):
+            raise ValueError("input and output names must be unique")
+        for name in input_names:
+            if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", name):
+                raise ValueError("input names must be valid template identifiers")
+        extraction_actions = {action.action_id: action for action in self.actions if isinstance(action, ExtractTextAction)}
+        for output in self.outputs:
+            source = extraction_actions.get(output.source_action_id)
+            if source is None or source.output_name != output.name:
+                raise ValueError("output source must be an extraction with the same output name")
+            parser_types = {"raw_text": "string", "integer": "integer", "decimal": "decimal", "currency": "decimal", "boolean": "boolean"}
+            if parser_types[output.parser] != output.output_type:
+                raise ValueError("output parser does not match output type")
+        if len({a.output_name for a in extraction_actions.values()}) != len(extraction_actions):
+            raise ValueError("each output must be extracted exactly once")
+        if any(a.output_name not in output_names for a in extraction_actions.values()):
+            raise ValueError("extraction references an undeclared output")
+        conditions = list(self.success_checkpoint.conditions) + [o.detection for o in self.known_business_outcomes]
+        risk_order = {ActionRisk.READ_ONLY: 0, ActionRisk.REVERSIBLE: 1, ActionRisk.IRREVERSIBLE: 2}
+        for action in self.actions:
+            if action.action_type not in self.safety_profile.permitted_action_types:
+                raise ValueError("action is excluded by artifact safety profile")
+            if risk_order[action.risk] > risk_order[self.safety_profile.maximum_risk]:
+                raise ValueError("action risk exceeds artifact maximum risk (including irreversible actions)")
+            conditions.extend(action.postconditions)
+            if isinstance(action, WaitForStateAction):
+                if isinstance(action.condition, ExtractedValueMatchesCondition):
+                    raise ValueError("wait requires a surface condition")
+                conditions.append(action.condition)
+            template = action.value_template if isinstance(action, FillAction) else action.route if isinstance(action, NavigateAction) else ""
+            references = re.findall(r"\$\{(?:inputs\.)?([a-zA-Z_][a-zA-Z0-9_]*)\}", template)
+            if any(name not in input_names for name in references):
+                raise ValueError("template references an undeclared input")
+            if "${" in re.sub(r"\$\{(?:inputs\.)?[a-zA-Z_][a-zA-Z0-9_]*\}", "", template):
+                raise ValueError("malformed template reference")
+        for condition in conditions:
+            text = getattr(condition, "expected_text", getattr(condition, "pattern", ""))
+            references = re.findall(r"\$\{(?:inputs\.)?([a-zA-Z_][a-zA-Z0-9_]*)\}", text)
+            if any(name not in input_names for name in references):
+                raise ValueError("checkpoint references an undeclared input")
+            if isinstance(condition, ExtractedValueMatchesCondition) and condition.output_name not in output_names:
+                raise ValueError("checkpoint references an undeclared output")
+            if hasattr(condition, "pattern"):
+                try:
+                    re.compile(condition.pattern)
+                except re.error as error:
+                    raise ValueError("invalid checkpoint pattern") from error
+        for parameter in self.inputs:
+            if getattr(parameter, "pattern", None):
+                try:
+                    re.compile(parameter.pattern)
+                except re.error as error:
+                    raise ValueError("invalid input pattern") from error
         declared_risks = {action.risk for action in self.actions}
         if ActionRisk.IRREVERSIBLE in declared_risks and self.safety_profile.risky_action_policy is RiskyActionPolicy.BLOCK:
             raise ValueError("artifact contains irreversible actions but its safety policy blocks them")

@@ -123,8 +123,12 @@
     }
   ],
   "success_checkpoint": {
-    "description": "A parseable savings balance is visible.",
+    "description": "Requested member details and parseable savings balance are present.",
     "conditions": [
+      {
+        "condition_type": "url_matches",
+        "pattern": "/members/${member_id}$"
+      },
       {
         "condition_type": "extracted_value_matches",
         "output_name": "savings_balance",

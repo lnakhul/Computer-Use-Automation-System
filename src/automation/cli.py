@@ -7,7 +7,7 @@ import json
 import os
 import uuid
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urljoin
 
 from automation.capabilities.models import CapabilityArtifact, ElementTarget, NavigateAction
 from automation.evidence import JsonlEvidenceWriter, RedactionPolicy, SensitiveDataRedactor
@@ -28,6 +28,8 @@ def main() -> None:
 
     discover_parser = subparsers.add_parser("discover", help="run LLM-driven discovery")
     discover_parser.add_argument("--goal", required=True)
+    discover_parser.add_argument("--timeout", type=float, default=120)
+    discover_parser.add_argument("--interactive", action="store_true")
     discover_parser.add_argument("--target", default="http://127.0.0.1:5001/members/search")
     discover_parser.add_argument("--member-id", required=True)
     discover_parser.add_argument("--artifact", default="examples/member_savings_balance.json")
@@ -37,12 +39,15 @@ def main() -> None:
     replay_parser = subparsers.add_parser("replay", help="replay a named artifact without an LLM")
     replay_parser.add_argument("artifact", help="path to the capability artifact JSON")
     replay_parser.add_argument("--member-id", required=True)
+    replay_parser.add_argument("--interactive", action="store_true")
     replay_parser.add_argument("--target", default="http://127.0.0.1:5001/members/search")
     replay_parser.add_argument("--evidence", default="evidence/replay-run.jsonl")
     replay_parser.add_argument("--evidence-directory", default="evidence/replay-failures")
 
     exceptional_parser = subparsers.add_parser("replay-not-found", help="replay the artifact with a missing member")
     exceptional_parser.add_argument("artifact", nargs="?", default="examples/member_savings_balance.json")
+    exceptional_parser.add_argument("--evidence-directory", default="evidence/replay-failures")
+    exceptional_parser.add_argument("--interactive", action="store_true")
     exceptional_parser.add_argument("--target", default="http://127.0.0.1:5001/members/search")
     exceptional_parser.add_argument("--evidence", default="evidence/replay-not-found.jsonl")
 
@@ -96,6 +101,7 @@ def _run_discovery(arguments: argparse.Namespace) -> None:
     )
     request = DiscoveryRequest(
         goal=arguments.goal,
+        total_timeout_seconds=arguments.timeout,
         artifact_definition=definition,
         runtime_parameters=[RuntimeParameter(name="member_id", value=arguments.member_id)],
     )
@@ -107,10 +113,14 @@ def _run_discovery(arguments: argparse.Namespace) -> None:
     writer = _writer(arguments.evidence, run_id, template)
     policy_surface_factory = _policy_for_target(arguments.target, template)
     with sync_playwright() as browser_runtime:
-        browser = browser_runtime.chromium.launch(channel="chrome")
-        page = browser.new_page()
+        browser = browser_runtime.chromium.launch(channel="chrome", headless=not getattr(arguments, "interactive", False))
+        page = browser.new_page(service_workers="block", accept_downloads=False)
         surface = PlaywrightBrowserSurfaceAdapter(page)
-        result = DiscoveryRunner(surface, provider, policy_surface_factory(surface), writer).run(request)
+        operator = _operator_handler(surface, writer, Path("evidence/discovery-failures")) if arguments.interactive else None
+        result = DiscoveryRunner(surface, provider, policy_surface_factory(surface), writer,
+                                 Path("evidence/discovery-failures"), operator).run(request)
+        if operator and result.artifact is None:
+            operator(template.capability_id, "Discovery stopped", "discovery", result.steps_executed, result.stop_state.value)
         if result.artifact is not None:
             Path(arguments.output).parent.mkdir(parents=True, exist_ok=True)
             Path(arguments.output).write_text(result.artifact.model_dump_json(indent=2), encoding="utf-8")
@@ -133,14 +143,15 @@ def _run_replay(arguments: argparse.Namespace, mode: str) -> None:
     writer = _writer(arguments.evidence, run_id, artifact)
     writer.write_event({"event_type": "replay_started", "invocation": {"member_id": "[REDACTED]"}})
     with sync_playwright() as browser_runtime:
-        browser = browser_runtime.chromium.launch(channel="chrome")
-        page = browser.new_page()
+        browser = browser_runtime.chromium.launch(channel="chrome", headless=not getattr(arguments, "interactive", False))
+        page = browser.new_page(service_workers="block", accept_downloads=False)
         surface = PlaywrightBrowserSurfaceAdapter(page)
         runner = CapabilityReplayRunner(
             surface,
             _policy_for_target(target, artifact)(surface),
             writer,
             Path(arguments.evidence_directory),
+            intervention_handler=_operator_handler(surface, writer, Path(arguments.evidence_directory)) if arguments.interactive else None,
         )
         result = runner.replay(artifact, {"member_id": member_id})
         writer.write_event({"event_type": "replay_result", "result": result.model_dump(mode="json"), "checkpoint_verification": result.result_type == "succeeded"})
@@ -155,8 +166,8 @@ def _run_human_demo(arguments: argparse.Namespace) -> None:
     writer = _writer(arguments.evidence, run_id)
     target = f"{arguments.target}?simulate=dialog"
     with sync_playwright() as browser_runtime:
-        browser = browser_runtime.chromium.launch(channel="chrome")
-        page = browser.new_page()
+        browser = browser_runtime.chromium.launch(channel="chrome", headless=not getattr(arguments, "interactive", False))
+        page = browser.new_page(service_workers="block", accept_downloads=False)
         surface = PlaywrightBrowserSurfaceAdapter(page)
         surface.navigate(target)
         coordinator = HumanInterventionCoordinator(surface, writer, Path(arguments.evidence_directory))
@@ -183,6 +194,34 @@ def _run_human_demo(arguments: argparse.Namespace) -> None:
         browser.close()
 
 
+def _operator_handler(surface, writer, evidence_directory):
+    """A minimal explicit-action operator UI on the exact paused browser session."""
+    coordinator = HumanInterventionCoordinator(surface, writer, evidence_directory)
+    def handle(capability_id, goal, step_id, step_index, reason):
+        request = coordinator.request_intervention(capability_id, goal, step_id, step_index, reason)
+        print(json.dumps({"intervention_request": request.model_dump(mode="json")}))
+        print('Enter a human action JSON: {"action_type":"click","target":{...}}; or resume / stop. Use this console so actions are recorded.')
+        while True:
+            try:
+                command = input("operator> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                command = "stop"
+            if command in {"resume", "stop"}:
+                coordinator.resume_automation()
+                return command == "resume"
+            try:
+                payload = json.loads(command)
+                action = HumanSurfaceAction(
+                    action_type=HumanSurfaceActionType(payload["action_type"]),
+                    target=ElementTarget.model_validate(payload["target"]) if "target" in payload else None,
+                    destination=payload.get("destination"), value=payload.get("value"),
+                    description="Explicit operator action")
+                coordinator.perform_human_action(action)
+            except Exception:
+                print("Operator action failed; session remains paused.")
+    return handle
+
+
 def _load_artifact(path: str) -> CapabilityArtifact:
     return CapabilityArtifact.model_validate_json(Path(path).read_text(encoding="utf-8"))
 
@@ -192,14 +231,21 @@ def _artifact_for_target(artifact: CapabilityArtifact, target: str) -> Capabilit
     absolute_actions = []
     for action in artifact.actions:
         if isinstance(action, NavigateAction) and action.route.startswith("/"):
-            action = action.model_copy(update={"route": target})
+            action = action.model_copy(update={"route": urljoin(target, action.route)})
         absolute_actions.append(action)
-    return artifact.model_copy(update={"entry_point": absolute_entry_point, "actions": absolute_actions})
+    return CapabilityArtifact.model_validate(artifact.model_copy(update={"entry_point": absolute_entry_point, "actions": absolute_actions}).model_dump())
 
 
 def _policy_for_target(target: str, artifact: CapabilityArtifact):
     origin = _origin(target)
+    # Trusted demo deployment configuration is independent of generated artifacts.
+    from automation.capabilities.models import ActionRisk
+    from automation.policy.demo import approved_interactions
+    interactions = approved_interactions()
     policy = SafetyPolicy(
+        approved_interactions=interactions,
+        allowed_post_routes=["/members/search"],
+        denied_risks=[ActionRisk.IRREVERSIBLE] if artifact.safety_profile.risky_action_policy == "block" else [],
         allowed_targets=[AllowedTarget(origin=origin, route_prefixes=["/members", "/accounts"])],
         permitted_action_types=artifact.safety_profile.permitted_action_types,
     )
@@ -210,7 +256,7 @@ def _writer(path: str, run_id: str, artifact: CapabilityArtifact | None = None) 
     return JsonlEvidenceWriter(
         Path(path),
         SensitiveDataRedactor(RedactionPolicy(
-            sensitive_field_names=["member_id", "authorization", "cookie", "token", "balance", "savings_balance", "outputs", "visible_text", "dialog_text", "value"],
+            sensitive_field_names=["member_id", "authorization", "cookie", "token", "balance", "savings_balance", "outputs", "visible_text", "dialog_text", "value", "observed_state", "sanitized_current_state", "current_location", "location", "title", "reasoning_summary", "goal", "description", "debugging_summary"],
             sensitive_value_patterns=[r"Bearer\s+\S+", r"token=[^\s&]+"],
         )),
         run_id=run_id,

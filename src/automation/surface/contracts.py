@@ -20,6 +20,7 @@ class SurfaceObservation:
     title: str
     visible_text: str
     dialog_text: str | None = None
+    controls: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
