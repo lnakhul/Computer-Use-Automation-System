@@ -296,3 +296,22 @@ def test_sensitive_parameter_default_is_rejected() -> None:
             success_checkpoint={"description": "Done", "conditions": [{"condition_type": "element_visible", "target": target()}]},
             safety_profile={"permitted_action_types": ["fill"]},
         )
+
+
+def test_evidence_writer_adds_run_metadata_and_timestamp(tmp_path: Path) -> None:
+    destination = tmp_path / "metadata.jsonl"
+    writer = JsonlEvidenceWriter(
+        destination,
+        SensitiveDataRedactor(RedactionPolicy()),
+        run_id="run-123",
+        capability_id="member.lookup",
+        artifact_schema_version="1.0",
+    )
+
+    writer.write_event({"event_type": "checkpoint_verified", "checkpoint": "member detail"})
+
+    event = json.loads(destination.read_text(encoding="utf-8"))
+    assert event["run_id"] == "run-123"
+    assert event["capability_id"] == "member.lookup"
+    assert event["artifact_schema_version"] == "1.0"
+    assert event["event_timestamp"].endswith("+00:00")
