@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
@@ -34,7 +36,7 @@ class OpenAICompatibleDecisionProvider:
                 },
                 {
                     "role": "user",
-                    "content": {
+                    "content": json.dumps({
                         "goal": goal,
                         "observation": {
                             "location": observation.current_location,
@@ -42,7 +44,7 @@ class OpenAICompatibleDecisionProvider:
                             "visible_text": observation.visible_text,
                             "dialog_text": observation.dialog_text,
                         },
-                    },
+                    }),
                 },
             ],
             "response_format": {

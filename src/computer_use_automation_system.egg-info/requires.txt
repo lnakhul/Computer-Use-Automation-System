@@ -1,4 +1,5 @@
 flask<4,>=3.0
+httpx<1,>=0.27
 playwright<2,>=1.45
 pydantic<3,>=2.7
 
