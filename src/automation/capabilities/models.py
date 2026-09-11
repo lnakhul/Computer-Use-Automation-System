@@ -142,6 +142,12 @@ class StringParameter(ContractModel):
     pattern: str | None = None
     default: str | None = None
 
+    @model_validator(mode="after")
+    def reject_sensitive_default(self) -> StringParameter:
+        if self.sensitive and self.default is not None:
+            raise ValueError("sensitive parameters cannot persist default values")
+        return self
+
 
 class IntegerParameter(ContractModel):
     value_type: Literal[ParameterType.INTEGER] = ParameterType.INTEGER
@@ -152,6 +158,12 @@ class IntegerParameter(ContractModel):
     minimum: int | None = None
     maximum: int | None = None
     default: int | None = None
+
+    @model_validator(mode="after")
+    def reject_sensitive_default(self) -> IntegerParameter:
+        if self.sensitive and self.default is not None:
+            raise ValueError("sensitive parameters cannot persist default values")
+        return self
 
 
 class DecimalParameter(ContractModel):
@@ -164,6 +176,12 @@ class DecimalParameter(ContractModel):
     maximum: Decimal | None = None
     default: Decimal | None = None
 
+    @model_validator(mode="after")
+    def reject_sensitive_default(self) -> DecimalParameter:
+        if self.sensitive and self.default is not None:
+            raise ValueError("sensitive parameters cannot persist default values")
+        return self
+
 
 class BooleanParameter(ContractModel):
     value_type: Literal[ParameterType.BOOLEAN] = ParameterType.BOOLEAN
@@ -172,6 +190,12 @@ class BooleanParameter(ContractModel):
     required: bool = True
     sensitive: bool = False
     default: bool | None = None
+
+    @model_validator(mode="after")
+    def reject_sensitive_default(self) -> BooleanParameter:
+        if self.sensitive and self.default is not None:
+            raise ValueError("sensitive parameters cannot persist default values")
+        return self
 
 
 InputParameter = Annotated[
@@ -250,6 +274,12 @@ class FillAction(ContractModel):
     value_template: str = Field(min_length=1)
     sensitive_value: bool = False
     postconditions: list[CheckpointCondition] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_symbolic_value_template(self) -> FillAction:
+        if "${" not in self.value_template or "}" not in self.value_template:
+            raise ValueError("fill values must be symbolic parameter templates")
+        return self
 
 
 class WaitForStateAction(ContractModel):

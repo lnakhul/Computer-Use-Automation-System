@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from automation.capabilities.models import ElementTarget
+from automation.capabilities.models import CheckpointCondition
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,9 @@ class ComputerSurfaceAdapter(Protocol):
 
     def read_text_or_value(self, target: ElementTarget) -> str:
         """Read visible text or a form control value."""
+
+    def wait_for_state(self, condition: CheckpointCondition, timeout_seconds: float) -> None:
+        """Wait for a declared surface state."""
 
     def capture_evidence(self, destination: Path) -> Path:
         """Capture evidence for the current state and return its path."""

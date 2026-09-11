@@ -15,6 +15,9 @@ from automation.capabilities.models import (
     LocatorKind,
     RoleLocator,
     TextLocator,
+    CheckpointCondition,
+    ElementVisibleCondition,
+    TextContainsCondition,
 )
 from automation.surface.contracts import (
     LiveInteractiveSession,
@@ -81,6 +84,18 @@ class PlaywrightBrowserSurfaceAdapter:
         if resolution.locator.evaluate("element => element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement"):
             return resolution.locator.input_value()
         return resolution.locator.inner_text()
+
+    def wait_for_state(self, condition: CheckpointCondition, timeout_seconds: float) -> None:
+        timeout_milliseconds = int(timeout_seconds * 1000)
+        if isinstance(condition, ElementVisibleCondition):
+            self._resolve_locator(condition.target).locator.wait_for(state="visible", timeout=timeout_milliseconds)
+            return
+        if isinstance(condition, TextContainsCondition):
+            self._resolve_locator(condition.target).locator.wait_for(state="visible", timeout=timeout_milliseconds)
+            if condition.expected_text not in self._resolve_locator(condition.target).locator.inner_text():
+                raise TargetResolutionError(f"expected text was not visible: {condition.expected_text}")
+            return
+        raise TargetResolutionError("this Playwright adapter only waits on visible or text conditions")
 
     def capture_evidence(self, destination: Path) -> Path:
         self._require_automation_control()
