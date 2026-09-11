@@ -1,5 +1,86 @@
 # 1. Architecture
 
+The implementation is a single-process Python package with logical module boundaries rather than separate services. The concrete surface is a local Flask application that presents a deliberately old-fashioned member-servicing UI: table-based details, conventional labels, no test IDs, validation errors, a not-found state, a simulated delay, and a simulated dialog. All data is synthetic.
+
+The main components are:
+
+- `capabilities`: Pydantic v2 models for versioned artifacts, typed inputs and outputs, ordered actions, target strategies, checkpoints, compatibility metadata, and safety profiles.
+- `surface`: the `ComputerSurfaceAdapter` protocol and the Playwright implementation. Playwright types and locator mechanics stop at this boundary.
+- `policy`: explicit target/action/risk policy models, a pure evaluator, and a policy-enforcing surface facade.
+- `discovery`: the structured `AgentDecisionProvider`, OpenAI-compatible provider, bounded observe-decide-act runner, and artifact conversion.
+- `replay`: the ordered, LLM-free artifact executor and typed execution results.
+- `intervention`: same-session control ownership, human action execution, resume, and transfer records.
+- `evidence`: recursive redaction and JSONL persistence.
+- `cli`: evaluator-facing commands for the demo app, discovery, replay, exceptional replay, and handoff demonstration.
+
+The design deliberately keeps the LLM out of replay. During discovery the provider returns one Pydantic-validated decision. The runner records only the semantic action and a short reasoning summary, then sends the action through policy and the surface adapter. This trades generality for a narrow, inspectable vertical slice.
+
+# 2. Artifact schema
+
+`CapabilityArtifact` is a JSON-serializable, versioned Pydantic model. Its schema version is currently `1.0`; its independent `revision` identifies a reviewed capability revision. The artifact contains:
+
+- capability identity, name, description, and compatibility metadata;
+- entry point and ordered discriminated-union actions;
+- typed input declarations and symbolic fill templates;
+- output extraction declarations;
+- a success checkpoint and optional known business outcomes; and
+- a safety profile listing permitted action types and maximum risk behavior.
+
+The V1 actions are `navigate`, `click`, `fill`, `wait_for_state`, and `extract_text`. A target contains ordered locator candidates. Candidate strategies include role/name, label, visible text, attribute, and CSS forms. The artifact does not contain Playwright objects or model transcripts.
+
+Runtime values are supplied at invocation time. A recorded fill step stores `${member_id}` rather than the value used during discovery. Sensitive parameter defaults are rejected by the model validation, and the CLI redacts invocation values in evidence. The checked-in example is a synthetic artifact; it is not represented as a live discovery recording.
+
+# 3. Determinism & error handling
+
+`CapabilityReplayRunner` accepts an artifact, invocation mapping, policy-enforced surface, and optional evidence sinks. It validates required and unknown parameters, executes actions in their serialized order, resolves targets through the adapter, and never imports or calls an LLM provider.
+
+Each action passes through `PolicyEnforcedSurfaceAdapter` before reaching the underlying surface. Fill templates are resolved from in-memory invocation values at execution time. Surface operations use Playwright's bounded action/wait APIs; replay adds a fixed transient retry budget and retries only errors whose message identifies a slow, loading, or transient condition. It does not invent alternate steps.
+
+After actions, the runner checks declared business outcomes and then the final checkpoint. `MEMBER_NOT_FOUND` is returned as `KnownBusinessOutcome`, not an exception. Other result types are `CapabilityExecutionSucceeded`, `CapabilityExecutionFailed`, and `HumanInterventionRequired`. Hard failures include the capability ID, artifact schema version, step ID/index, expected state, sanitized observed state, machine-readable category, debugging summary, and optional screenshot reference.
+
+Checkpoint support is intentionally small: visible targets, text containment, URL patterns, and extracted-value patterns. The current replay tests use deterministic fake surfaces for the taxonomy and existing browser tests exercise the real Playwright adapter. The CLI provides real-browser replay against the local app.
+
+# 4. Heterogeneity & multi-tenant
+
+The artifact describes semantic intent and expected states; `ComputerSurfaceAdapter` supplies perception and interaction mechanics. That boundary permits a future accessibility-tree or native desktop adapter without changing the capability action vocabulary. The current implementation only supplies Playwright. Coordinate automation, desktop automation, and accessibility-tree resolution are not implemented.
+
+Compatibility metadata records surface kind, vendor product/version, application identity/version, and an optional tenant variant. The current CLI does not implement a tenant catalog or override service. A credible next layer would keep a vendor-level artifact as the base contract and apply constrained, versioned tenant locator/route overrides at runtime, while preserving the artifact's safety profile and input/output contract. Replay failures and fallback usage would be the signals for drift review rather than automatic mutation.
+
+This is a design seam, not a claim that multi-tenant execution exists in the current code.
+
+# 5. Escalation & handoff
+
+`HumanInterventionCoordinator` owns a session-scoped lease represented by `AUTOMATION` or `HUMAN`. It observes the current state, calls `expose_live_session`, creates a typed `HumanInterventionRequest`, and captures a screenshot reference. The request contains capability and goal, current step, reason, sanitized state, session ID, and control owner.
+
+While the human owns the session, the Playwright adapter rejects automation operations. The coordinator accepts explicit typed human actions against that same browser page, records a `HumanActionRecord`, captures evidence, and exposes `resume_automation`. Resume requires the same session ID and changes ownership back to automation. Invalid repeated handoffs, late human actions, and invalid resumes are rejected.
+
+The `human-demo` CLI exercises this path against the live local browser by dismissing a simulated session dialog. It is intentionally a small scripted operator surface. There is no real-time multi-user console, authentication for operators, or automatic integration from every replay failure into a coordinator request; those are deliberate scope cuts.
+
+# 6. Safety
+
+Safety is explicit and evaluated before an action is delegated. `SafetyPolicy` contains allowed origins/routes, permitted action types, denied risk classes, and risk classes requiring confirmation. `SafetyPolicyEvaluator` returns `allowed`, `requires_human_confirmation`, or `denied`. The wrapper blocks navigation outside the configured target allowlist and blocks action types not explicitly permitted.
+
+The V1 risk model distinguishes read-only, reversible, and irreversible actions. Irreversible actions are denied by the default artifact policy unless a policy explicitly requires human confirmation. Replay maps a confirmation-required action to `HumanInterventionRequired`; it does not silently execute it.
+
+Evidence persistence is a separate security boundary. `SensitiveDataRedactor` recursively redacts configured field names and token/header patterns before JSONL writing. CLI policies redact member IDs, authorization/cookie/token fields, balances, outputs, visible state, and values. Artifacts contain symbolic parameter references, not invocation values. These controls reduce accidental persistence; they do not replace secret management, authorization, or production compliance controls.
+
+# 7. Cuts
+
+The following were intentionally not implemented:
+
+- real banking or external production applications;
+- real credentials, production PII, or financial transaction submission;
+- a native desktop or accessibility-tree surface adapter;
+- a distributed worker/service architecture;
+- a capability catalog, approval lifecycle, tenant override service, or drift remediation;
+- open-ended LLM recovery during replay;
+- a full operator console with concurrent users, authentication, or co-browsing;
+- automatic escalation wiring from every replay failure into a human queue; and
+- a fabricated live discovery evidence bundle.
+
+The scope was reduced intentionally to preserve depth in the load-bearing requirements: typed and reviewable artifacts, a real surface abstraction, policy-before-action enforcement, an LLM decision seam, deterministic replay, explicit business/error result types, redacted evidence, and same-session control transfer. The remaining work is primarily production hardening and breadth around those seams rather than a hidden claim of completeness.
+# 1. Architecture
+
 This project uses a small, single-process Python application with clear logical boundaries rather than prematurely introducing services, queues, or multi-tenant infrastructure. The implemented vertical slice targets a local, intentionally legacy-style member-servicing web application with synthetic data. The representative capability is: look up a member by member ID and return the current savings balance.
 
 The main boundaries are:
