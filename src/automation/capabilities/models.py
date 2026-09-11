@@ -289,6 +289,7 @@ class WaitForStateAction(ContractModel):
     risk: ActionRisk = ActionRisk.READ_ONLY
     condition: CheckpointCondition
     timeout_seconds: float = Field(gt=0, le=120)
+    postconditions: list[CheckpointCondition] = Field(default_factory=list)
 
 
 class ExtractTextAction(ContractModel):
