@@ -3,6 +3,8 @@ Name: computer-use-automation-system
 Version: 0.1.0
 Summary: Typed contracts for reusable computer-use automation capabilities
 Requires-Python: >=3.11
+Requires-Dist: flask<4,>=3.0
+Requires-Dist: playwright<2,>=1.45
 Requires-Dist: pydantic<3,>=2.7
 Provides-Extra: test
 Requires-Dist: pytest<9,>=8; extra == "test"
