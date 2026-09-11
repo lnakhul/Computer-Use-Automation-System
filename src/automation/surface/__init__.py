@@ -2,6 +2,8 @@
 
 from .contracts import (
     ComputerSurfaceAdapter,
+    HumanSurfaceAction,
+    HumanSurfaceActionType,
     LiveInteractiveSession,
     ResolvedSurfaceTarget,
     SurfaceObservation,
@@ -9,6 +11,8 @@ from .contracts import (
 
 __all__ = [
     "ComputerSurfaceAdapter",
+    "HumanSurfaceAction",
+    "HumanSurfaceActionType",
     "LiveInteractiveSession",
     "ResolvedSurfaceTarget",
     "SurfaceObservation",

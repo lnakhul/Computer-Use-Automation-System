@@ -21,6 +21,8 @@ from automation.capabilities.models import (
 )
 from automation.surface.contracts import (
     LiveInteractiveSession,
+    HumanSurfaceAction,
+    HumanSurfaceActionType,
     ResolvedSurfaceTarget,
     SurfaceObservation,
 )
@@ -98,7 +100,8 @@ class PlaywrightBrowserSurfaceAdapter:
         raise TargetResolutionError("this Playwright adapter only waits on visible or text conditions")
 
     def capture_evidence(self, destination: Path) -> Path:
-        self._require_automation_control()
+        if self._control_owner not in {"automation", "human"}:
+            raise SessionControlError("live session has no valid owner")
         destination.parent.mkdir(parents=True, exist_ok=True)
         self._page.screenshot(path=str(destination), full_page=True)
         return destination
@@ -117,6 +120,26 @@ class PlaywrightBrowserSurfaceAdapter:
         self._control_owner = "automation"
         return self._session_handle()
 
+    def perform_human_action(self, action: HumanSurfaceAction) -> str | ResolvedSurfaceTarget | None:
+        self._require_human_control()
+        if action.action_type is HumanSurfaceActionType.NAVIGATE:
+            if action.destination is None:
+                raise SessionControlError("human navigation requires a destination")
+            self._page.goto(action.destination, wait_until="domcontentloaded")
+            return None
+        if action.target is None:
+            raise SessionControlError("human target action requires a target")
+        resolution = self._resolve_locator_without_ownership_check(action.target)
+        if action.action_type is HumanSurfaceActionType.CLICK:
+            resolution.locator.click()
+            return resolution.metadata
+        if action.action_type is HumanSurfaceActionType.ENTER_TEXT:
+            if action.value is None:
+                raise SessionControlError("human text entry requires a value")
+            resolution.locator.fill(action.value)
+            return resolution.metadata
+        raise SessionControlError(f"unsupported human action: {action.action_type.value}")
+
     def _session_handle(self) -> LiveInteractiveSession:
         return LiveInteractiveSession(
             session_id=self._session_id,
@@ -128,7 +151,15 @@ class PlaywrightBrowserSurfaceAdapter:
         if self._control_owner != "automation":
             raise SessionControlError("automation does not own the live session")
 
+    def _require_human_control(self) -> None:
+        if self._control_owner != "human":
+            raise SessionControlError("human does not own the live session")
+
     def _resolve_locator(self, target: ElementTarget) -> _ResolvedLocator:
+        self._require_automation_control()
+        return self._resolve_locator_without_ownership_check(target)
+
+    def _resolve_locator_without_ownership_check(self, target: ElementTarget) -> _ResolvedLocator:
         for candidate in target.candidates:
             locator = self._locator_for_strategy(candidate.strategy)
             if locator.count() == 1:

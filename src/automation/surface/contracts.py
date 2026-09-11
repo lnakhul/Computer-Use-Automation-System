@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -39,6 +40,23 @@ class LiveInteractiveSession:
     control_owner: str
 
 
+class HumanSurfaceActionType(StrEnum):
+    NAVIGATE = "navigate"
+    CLICK = "click"
+    ENTER_TEXT = "enter_text"
+
+
+@dataclass(frozen=True)
+class HumanSurfaceAction:
+    """One explicit operator action against the handed-off live surface."""
+
+    action_type: HumanSurfaceActionType
+    target: ElementTarget | None = None
+    value: str | None = None
+    destination: str | None = None
+    description: str = "operator action"
+
+
 @runtime_checkable
 class ComputerSurfaceAdapter(Protocol):
     """Operations required by discovery and deterministic replay."""
@@ -72,3 +90,6 @@ class ComputerSurfaceAdapter(Protocol):
 
     def resume_live_session(self, session_id: str) -> LiveInteractiveSession:
         """Resume automation ownership for the same live session."""
+
+    def perform_human_action(self, action: HumanSurfaceAction) -> str | ResolvedSurfaceTarget | None:
+        """Perform one action while the human owns the live session."""
