@@ -26,6 +26,10 @@ from automation.surface.contracts import (
 class PolicyViolationError(RuntimeError):
     """Raised when policy does not allow an action to execute."""
 
+    def __init__(self, message: str, decision: PolicyDecisionKind) -> None:
+        super().__init__(message)
+        self.decision = decision
+
 
 class PolicyEnforcedSurfaceAdapter:
     """Authorizes a recorded action before delegating it to a surface."""
@@ -52,7 +56,10 @@ class PolicyEnforcedSurfaceAdapter:
             current_location=current_location,
         )
         if decision.decision is not PolicyDecisionKind.ALLOWED:
-            raise PolicyViolationError(f"{decision.decision.value}: {decision.reason}")
+            raise PolicyViolationError(
+                f"{decision.decision.value}: {decision.reason}",
+                decision.decision,
+            )
 
         if isinstance(action, NavigateAction):
             self._surface.navigate(decision.normalized_destination or action.route)
@@ -79,7 +86,10 @@ class PolicyEnforcedSurfaceAdapter:
         def replace_reference(match: re.Match[str]) -> str:
             parameter_name = match.group(1)
             if parameter_name not in runtime_values:
-                raise PolicyViolationError(f"runtime value is missing for parameter: {parameter_name}")
+                raise PolicyViolationError(
+                    f"runtime value is missing for parameter: {parameter_name}",
+                    PolicyDecisionKind.DENIED,
+                )
             return str(runtime_values[parameter_name])
 
         return re.sub(r"\$\{(?:inputs\.)?([a-zA-Z_][a-zA-Z0-9_]*)\}", replace_reference, value_template)

@@ -298,6 +298,7 @@ class ExtractTextAction(ContractModel):
     risk: ActionRisk = ActionRisk.READ_ONLY
     target: ElementTarget
     output_name: str = Field(min_length=1)
+    postconditions: list[CheckpointCondition] = Field(default_factory=list)
 
 
 Action = Annotated[
